@@ -1,5 +1,7 @@
 # README.md
 
+![スクリーンショット](https://github.com/AtsushiCafeK/rss_matome/blob/main/screenshot01.png "スクリーンショット")
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
