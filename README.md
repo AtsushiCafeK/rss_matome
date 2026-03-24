@@ -37,7 +37,12 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
-## 機能
+
+## 概要
+このアプリは開発途中のベータ版です。
+FeedlyなどのようなRSSを複数まとめて閲覧するリーダーアプリです。
+
+### 機能
 - rssをURLで追加
 - rssをフォルダで整理
 - フォルダ、RSSリストの任意の並び替え
@@ -50,3 +55,15 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 ### 設定
 - テーマ設定でダーク、ライトの切り替え
 - opml形式のエクスポート、インポート（feedlyからの移行可能）
+
+### ロードマップ
+- データのバックアップ、同期機能の検討開発
+- デバイス間の同期検討
+- Windows,MacOSパッケージ化
+- Androidアプリ検討
+
+### ライセンス
+MITライセンス
+
+### 開発
+開発: IT-Libero
