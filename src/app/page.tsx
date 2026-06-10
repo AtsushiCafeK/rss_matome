@@ -29,7 +29,9 @@ import {
   Bookmark,
   BookmarkCheck,
   BookmarkX,
-  Star
+  Star,
+  HardDrive,
+  FolderOpen
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
@@ -52,6 +54,17 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import {
+  initStorage,
+  chooseDirectory,
+  reconnect as reconnectStorage,
+  disconnect as disconnectStorage,
+  getItem as storageGetItem,
+  setItem as storageSetItem,
+  subscribeStatus,
+  getStatus,
+  StorageStatus,
+} from '@/lib/storage';
 
 // --- Types ---
 interface Folder {
@@ -167,6 +180,9 @@ export default function RSSReader() {
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [storageStatus, setStorageStatus] = useState<StorageStatus>(() =>
+    typeof window !== 'undefined' ? getStatus() : { supported: false, mode: 'local', needsPermission: false, dirName: null }
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [renameFolderId, setRenameFolderId] = useState<string | null>(null);
   const [renameFolderName, setRenameFolderName] = useState('');
@@ -196,44 +212,66 @@ export default function RSSReader() {
 
   // Initialize
   useEffect(() => {
-    const savedFeeds = localStorage.getItem('rss-feeds');
-    const savedFolders = localStorage.getItem('rss-folders');
-    const savedTheme = localStorage.getItem('rss-theme') as 'light' | 'dark';
-    const savedViewMode = localStorage.getItem('rss-view-mode') as ViewMode;
+    const unsubscribe = subscribeStatus(setStorageStatus);
+    (async () => {
+      setStorageStatus(await initStorage());
 
-    if (savedFeeds) setFeeds(JSON.parse(savedFeeds));
-    else {
-      setFeeds(DEFAULT_FEEDS);
-      localStorage.setItem('rss-feeds', JSON.stringify(DEFAULT_FEEDS));
-    }
+      const savedFeeds = await storageGetItem('rss-feeds');
+      const savedFolders = await storageGetItem('rss-folders');
+      const savedTheme = (await storageGetItem('rss-theme')) as 'light' | 'dark' | null;
+      const savedViewMode = (await storageGetItem('rss-view-mode')) as ViewMode | null;
 
-    if (savedFolders) {
-      const parsed = JSON.parse(savedFolders);
-      setFolders(parsed);
-      // フォルダは初期状態で折りたたまれた状態を維持する
-      setExpandedFolders(new Set());
-    }
-    
-    if (savedTheme) setTheme(savedTheme);
-    if (savedViewMode) setViewMode(savedViewMode);
+      if (savedFeeds) setFeeds(JSON.parse(savedFeeds));
+      else {
+        setFeeds(DEFAULT_FEEDS);
+        storageSetItem('rss-feeds', JSON.stringify(DEFAULT_FEEDS));
+      }
 
-    const savedBookmarks = localStorage.getItem('rss-bookmarks');
-    const savedBmFolders = localStorage.getItem('rss-bookmark-folders');
-    if (savedBookmarks) setBookmarks(JSON.parse(savedBookmarks));
-    if (savedBmFolders) setBookmarkFolders(JSON.parse(savedBmFolders));
-    const savedRead = localStorage.getItem('rss-read-links');
-    if (savedRead) setReadLinks(new Set(JSON.parse(savedRead)));
+      if (savedFolders) {
+        const parsed = JSON.parse(savedFolders);
+        setFolders(parsed);
+        // フォルダは初期状態で折りたたまれた状態を維持する
+        setExpandedFolders(new Set());
+      }
+
+      if (savedTheme) setTheme(savedTheme);
+      if (savedViewMode) setViewMode(savedViewMode);
+
+      const savedBookmarks = await storageGetItem('rss-bookmarks');
+      const savedBmFolders = await storageGetItem('rss-bookmark-folders');
+      if (savedBookmarks) setBookmarks(JSON.parse(savedBookmarks));
+      if (savedBmFolders) setBookmarkFolders(JSON.parse(savedBmFolders));
+      const savedRead = await storageGetItem('rss-read-links');
+      if (savedRead) setReadLinks(new Set(JSON.parse(savedRead)));
+    })();
+    return unsubscribe;
   }, []);
+
+  // 保存先フォルダの選択 / 再接続 / 解除 (データ再読込のため接続後はリロード)
+  const handleChooseDirectory = async () => {
+    const status = await chooseDirectory();
+    if (status) window.location.reload();
+  };
+
+  const handleReconnect = async () => {
+    const ok = await reconnectStorage();
+    if (ok) window.location.reload();
+  };
+
+  const handleDisconnect = async () => {
+    if (!window.confirm('保存フォルダとの接続を解除しますか？\nフォルダ内のファイルは残り、以降はブラウザ内(LocalStorage)に保存されます。')) return;
+    await disconnectStorage();
+  };
 
   // Sync settings
   useEffect(() => {
     if (theme === 'dark') document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
-    localStorage.setItem('rss-theme', theme);
+    storageSetItem('rss-theme', theme);
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem('rss-view-mode', viewMode);
+    storageSetItem('rss-view-mode', viewMode);
   }, [viewMode]);
 
   // Fetch articles
@@ -328,7 +366,7 @@ export default function RSSReader() {
     const n: Folder = { id: Date.now().toString(), name: newFolderName.trim() };
     const u = [...folders, n];
     setFolders(u);
-    localStorage.setItem('rss-folders', JSON.stringify(u));
+    storageSetItem('rss-folders', JSON.stringify(u));
     setExpandedFolders(prev => new Set(prev).add(n.id));
     setNewFolderName('');
     setIsAddingFolder(false);
@@ -341,7 +379,7 @@ export default function RSSReader() {
     }
     const u = folders.map(f => f.id === id ? { ...f, name: newName.trim() } : f);
     setFolders(u);
-    localStorage.setItem('rss-folders', JSON.stringify(u));
+    storageSetItem('rss-folders', JSON.stringify(u));
     setRenameFolderId(null);
   };
 
@@ -359,14 +397,14 @@ export default function RSSReader() {
     const bm: SavedBookmark = { id: Date.now().toString(), article, folderId, savedAt: new Date().toISOString() };
     const u = [...bookmarks, bm];
     setBookmarks(u);
-    localStorage.setItem('rss-bookmarks', JSON.stringify(u));
+    storageSetItem('rss-bookmarks', JSON.stringify(u));
     setBookmarkFolderPickArticle(null);
   };
 
   const removeBookmark = (link: string) => {
     const u = bookmarks.filter(b => b.article.link !== link);
     setBookmarks(u);
-    localStorage.setItem('rss-bookmarks', JSON.stringify(u));
+    storageSetItem('rss-bookmarks', JSON.stringify(u));
   };
 
   const addBookmarkFolder = () => {
@@ -375,17 +413,17 @@ export default function RSSReader() {
     const n: BookmarkFolder = { id: Date.now().toString(), name: name.trim() };
     const u = [...bookmarkFolders, n];
     setBookmarkFolders(u);
-    localStorage.setItem('rss-bookmark-folders', JSON.stringify(u));
+    storageSetItem('rss-bookmark-folders', JSON.stringify(u));
   };
 
   const deleteBookmarkFolder = (id: string) => {
     if (!window.confirm('フォルダを削除しますか？フォルダ内のブックマークは未分類に移動されます。')) return;
     const u = bookmarkFolders.filter(f => f.id !== id);
     setBookmarkFolders(u);
-    localStorage.setItem('rss-bookmark-folders', JSON.stringify(u));
+    storageSetItem('rss-bookmark-folders', JSON.stringify(u));
     const ub = bookmarks.map(b => b.folderId === id ? { ...b, folderId: undefined } : b);
     setBookmarks(ub);
-    localStorage.setItem('rss-bookmarks', JSON.stringify(ub));
+    storageSetItem('rss-bookmarks', JSON.stringify(ub));
     if (activeView?.type === 'bookmark-folder' && activeView.id === id) setActiveView(null);
   };
 
@@ -393,7 +431,7 @@ export default function RSSReader() {
     if (!newName.trim()) { setRenameBookmarkFolderId(null); return; }
     const u = bookmarkFolders.map(f => f.id === id ? { ...f, name: newName.trim() } : f);
     setBookmarkFolders(u);
-    localStorage.setItem('rss-bookmark-folders', JSON.stringify(u));
+    storageSetItem('rss-bookmark-folders', JSON.stringify(u));
     setRenameBookmarkFolderId(null);
   };
 
@@ -412,14 +450,14 @@ export default function RSSReader() {
     const next = new Set(readLinks);
     next.add(link);
     setReadLinks(next);
-    localStorage.setItem('rss-read-links', JSON.stringify(Array.from(next)));
+    storageSetItem('rss-read-links', JSON.stringify(Array.from(next)));
   };
 
   const markAllAsRead = () => {
     const next = new Set(readLinks);
     articles.forEach(a => next.add(a.link));
     setReadLinks(next);
-    localStorage.setItem('rss-read-links', JSON.stringify(Array.from(next)));
+    storageSetItem('rss-read-links', JSON.stringify(Array.from(next)));
   };
 
   const getFilteredArticles = (arts: Article[]) => {
@@ -432,7 +470,7 @@ export default function RSSReader() {
     e.stopPropagation();
     const u = folders.filter(f => f.id !== id);
     setFolders(u);
-    localStorage.setItem('rss-folders', JSON.stringify(u));
+    storageSetItem('rss-folders', JSON.stringify(u));
     setFeeds(feeds.map(f => f.folderId === id ? { ...f, folderId: undefined } : f));
   };
 
@@ -440,7 +478,7 @@ export default function RSSReader() {
     e.stopPropagation();
     const u = feeds.filter(f => f.id !== id);
     setFeeds(u);
-    localStorage.setItem('rss-feeds', JSON.stringify(u));
+    storageSetItem('rss-feeds', JSON.stringify(u));
     if (activeView?.id === id) setActiveView(null);
   };
 
@@ -452,10 +490,11 @@ export default function RSSReader() {
       const res = await fetch(`/api/rss?url=${encodeURIComponent(newFeedUrl)}`);
       if (!res.ok) throw new Error('Invalid RSS');
       const data = await res.json();
-      const n: Feed = { id: Date.now().toString(), title: data.title || 'New Feed', url: newFeedUrl, folderId: newFeedFolderId || undefined };
+      // オートディスカバリーで発見された場合は実際のフィードURLを保存する
+      const n: Feed = { id: Date.now().toString(), title: data.title || 'New Feed', url: data.feedUrl || newFeedUrl, folderId: newFeedFolderId || undefined };
       const u = [...feeds, n];
       setFeeds(u);
-      localStorage.setItem('rss-feeds', JSON.stringify(u));
+      storageSetItem('rss-feeds', JSON.stringify(u));
       setActiveView({ type: 'feed', id: n.id });
       setNewFeedUrl('');
     } catch (e) {
@@ -548,8 +587,8 @@ ${feeds.filter(f => !f.folderId).map(feed => `    <outline type="rss" text="${es
 
       setFolders(newFolders);
       setFeeds(newFeeds);
-      localStorage.setItem('rss-folders', JSON.stringify(newFolders));
-      localStorage.setItem('rss-feeds', JSON.stringify(newFeeds));
+      storageSetItem('rss-folders', JSON.stringify(newFolders));
+      storageSetItem('rss-feeds', JSON.stringify(newFeeds));
       alert(`${addedCount}件のフィードを読み込みました。`);
     } catch (err) {
       console.error(err);
@@ -576,7 +615,7 @@ ${feeds.filter(f => !f.folderId).map(feed => `    <outline type="rss" text="${es
         const oldIdx = items.findIndex(i => i.id === active.id);
         const newIdx = items.findIndex(i => i.id === over.id);
         const res = arrayMove(items, oldIdx, newIdx);
-        localStorage.setItem('rss-folders', JSON.stringify(res));
+        storageSetItem('rss-folders', JSON.stringify(res));
         return res;
       });
       return;
@@ -599,7 +638,7 @@ ${feeds.filter(f => !f.folderId).map(feed => `    <outline type="rss" text="${es
         const res = arrayMove(items, oldIdx, newIdx !== -1 ? newIdx : oldIdx).map(i => 
           i.id === active.id ? { ...i, folderId: targetFolderId } : i
         );
-        localStorage.setItem('rss-feeds', JSON.stringify(res));
+        storageSetItem('rss-feeds', JSON.stringify(res));
         return res;
       });
     }
@@ -974,6 +1013,33 @@ ${feeds.filter(f => !f.folderId).map(feed => `    <outline type="rss" text="${es
       
       {isSidebarOpen && isMobile && <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-10 lg:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
+      {/* Storage Reconnect Banner */}
+      {storageStatus.needsPermission && !isSettingsOpen && (
+        <div className="fixed bottom-4 right-4 z-40 max-w-sm bg-[var(--bg-main)] border border-[var(--border-color)] rounded-2xl shadow-2xl p-4 flex items-start gap-3">
+          <FolderOpen className="w-5 h-5 text-[var(--accent-color)] shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-bold text-sm mb-1">保存フォルダに再接続</div>
+            <p className="text-xs text-[var(--text-secondary)] mb-3">
+              フォルダ「{storageStatus.dirName}」のデータを使用するには再接続が必要です。
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReconnect}
+                className="px-3 py-1.5 bg-[var(--accent-color)] text-white rounded-lg text-xs font-medium hover:opacity-90"
+              >
+                再接続
+              </button>
+              <button
+                onClick={handleDisconnect}
+                className="px-3 py-1.5 border border-[var(--border-color)] rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--hover-color)]"
+              >
+                LocalStorageを使う
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1037,6 +1103,78 @@ ${feeds.filter(f => !f.folderId).map(feed => `    <outline type="rss" text="${es
                     {/* Note: In this version it merges by default. */}
                     <p className="text-[10px] text-[var(--text-secondary)] text-center pb-1">※インポート時は現在のリストにマージされます</p>
                   </div>
+                </div>
+              </section>
+
+              {/* Storage Location Section */}
+              <section>
+                <h3 className="text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-3">データ保存先</h3>
+                <div className="p-4 bg-[var(--bg-sidebar)] rounded-xl border border-[var(--border-color)] space-y-3">
+                  <div className="flex items-center gap-3 mb-2">
+                    {storageStatus.mode === 'fs'
+                      ? <FolderOpen className="w-5 h-5 text-[var(--accent-color)]" />
+                      : <HardDrive className="w-5 h-5 text-[var(--accent-color)]" />}
+                    <div>
+                      <div className="font-bold text-sm">
+                        {storageStatus.mode === 'fs' ? `フォルダ「${storageStatus.dirName}」` : 'ブラウザ内 (LocalStorage)'}
+                      </div>
+                      <div className="text-xs text-[var(--text-secondary)]">
+                        {storageStatus.mode === 'fs'
+                          ? '購読リストや既読状態を指定フォルダのJSONファイルに保存しています。フォルダをコピーするだけでバックアップできます。'
+                          : storageStatus.needsPermission
+                          ? `前回使用したフォルダ「${storageStatus.dirName}」があります。再接続するとフォルダ保存を再開できます。`
+                          : '保存先フォルダを指定すると、データをお好きなフォルダのJSONファイルに保存できます。'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {storageStatus.supported ? (
+                    storageStatus.mode === 'fs' ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={handleChooseDirectory}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-lg text-sm font-medium hover:bg-[var(--hover-color)] transition-colors"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                          フォルダを変更
+                        </button>
+                        <button
+                          onClick={handleDisconnect}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-lg text-sm font-medium hover:bg-[var(--hover-color)] transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                          接続を解除
+                        </button>
+                      </div>
+                    ) : storageStatus.needsPermission ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={handleReconnect}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--accent-color)] text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          再接続
+                        </button>
+                        <button
+                          onClick={handleChooseDirectory}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-lg text-sm font-medium hover:bg-[var(--hover-color)] transition-colors"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                          別のフォルダ
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleChooseDirectory}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-lg text-sm font-medium hover:bg-[var(--hover-color)] transition-colors"
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                        保存先フォルダを選択
+                      </button>
+                    )
+                  ) : (
+                    <p className="text-[10px] text-[var(--text-secondary)] text-center pb-1">※このブラウザはフォルダ保存に未対応です（Chrome / Edge で利用できます）</p>
+                  )}
                 </div>
               </section>
 
